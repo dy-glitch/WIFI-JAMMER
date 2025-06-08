@@ -38,7 +38,7 @@ def display_ascii_art():
     """Show styled title"""
     try:
         art = subprocess.run(
-            ['toilet', '-f', 'bigmono12', '-w', '100', 'WIFI-JAMMER'],
+            ['toilet', '-f', 'bigmono9', '-w', '100', 'WIFI-JAMMER'],
             capture_output=True, text=True
         ).stdout
         print(f"{GREEN}{art}{RESET}")
