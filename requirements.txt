@@ -1,3 +1,2 @@
-scapy
-
-
+scapy>=2.4.5
+colorama>=0.4.4
