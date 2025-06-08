@@ -1,2 +1,8 @@
+# Python dependencies
 scapy>=2.4.5
 colorama>=0.4.4
+
+# System package requirements (install manually)
+# Linux: sudo apt-get install wireless-tools toilet
+# macOS: brew install toilet (if available)
+#WOW
