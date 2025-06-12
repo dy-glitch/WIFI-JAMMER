@@ -48,6 +48,8 @@ def display_ascii_art():
         print(f"{GREEN}{art}{RESET}")
     except:
         print(f"{GREEN}\n  WIFI JAMMER\n{RESET}")
+    # Print credentials outside the try-except block
+    print(f"\n{BLUE}Author: https://github.com/dy-glitch | Instagram: @gangnapper{RESET}\n")
 
 def get_wireless_interfaces():
     """Get available wireless interfaces"""
@@ -333,3 +335,4 @@ if __name__ == "__main__":
         print(f"{RED}[-] Run as root!{RESET}")
         sys.exit(1)
     main()
+           
